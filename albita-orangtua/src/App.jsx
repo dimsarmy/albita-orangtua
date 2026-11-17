@@ -24,26 +24,23 @@ export default function App() {
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [sentMessages, setSentMessages] = useState([]);
 
-  // Fungsi dinamis untuk mengambil data siswa atau membuat profil otomatis jika kodenya valid ALBITA-*
   const getStudentData = (code) => {
     const formatted = code.trim().toUpperCase();
     if (!formatted.startsWith('ALBITA-')) return null;
 
-    // Ambil nama dari kode (misal ALBITA-AZKA -> Azka)
     const rawName = formatted.replace('ALBITA-', '');
     const formattedName = rawName.charAt(0) + rawName.slice(1).toLowerCase();
 
-    // Cek apakah ada sinkronisasi dari localStorage (jika dibuka di perangkat yang sama)
     try {
       const savedStudents = JSON.parse(localStorage.getItem('albita_students') || 'null');
       if (savedStudents) {
         const found = savedStudents.find((s) => s.accessCode === formatted);
-        if (!found) return null; // Jika dihapus guru, tolak login
+        if (!found) return null;
 
         return {
           id: found.id,
           name: found.name,
-          class: '6 SD',
+          class: found.class || '6 SD',
           parentName: found.parentName || 'Wali Murid',
           paymentStatus: found.paymentStatus || 'Belum Lunas',
           report: {
@@ -60,7 +57,6 @@ export default function App() {
       console.error(e);
     }
 
-    // Fallback dinamis jika data lokal belum sinkron
     return {
       id: 'std-dynamic',
       name: formattedName || 'Siswa Albita',
@@ -171,7 +167,10 @@ export default function App() {
         <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div>
-              <h2 className="font-bold text-lg text-slate-900">{student.name}</h2>
+              <div className="flex items-center gap-2 mb-1">
+                <h2 className="font-bold text-lg text-slate-900">{student.name}</h2>
+                <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">{student.class}</span>
+              </div>
               <p className="text-xs text-slate-500">Wali: <strong className="text-slate-700">{student.parentName}</strong></p>
             </div>
             <div className="flex items-center gap-2">
