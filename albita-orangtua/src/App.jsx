@@ -10,7 +10,10 @@ import {
   LogOut,
   ExternalLink,
   FileText,
-  Calendar as CalendarIcon
+  Calendar as CalendarIcon,
+  Download,
+  X,
+  Maximize2
 } from 'lucide-react';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
@@ -35,6 +38,9 @@ export default function App() {
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [sentMessages, setSentMessages] = useState([]);
 
+  // State untuk modal Preview / View Soal yang diperbesar
+  const [selectedExamDetail, setSelectedExamDetail] = useState(null);
+
   const now = new Date();
   const currentMonthName = MONTHS_ID[now.getMonth()];
   const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -53,7 +59,6 @@ export default function App() {
     }
 
     try {
-      // Ambil data siswa dari Supabase
       const { data: stds, error } = await supabase
         .from('students')
         .select('*')
@@ -61,11 +66,10 @@ export default function App() {
         .single();
 
       if (error || !stds) {
-        setLoginError('Kode akses tidak ditemukan atau belum terdaftar di sistem pengajar.');
+        setLoginError('Kode akses tidak ditemukan atau belum terdaftar di sistem.');
         return;
       }
 
-      // Ambil status pembayaran bulan ini
       const { data: pay } = await supabase
         .from('payments')
         .select('status')
@@ -73,14 +77,12 @@ export default function App() {
         .eq('student_id', stds.id)
         .single();
 
-      // Ambil catatan guru
       const { data: note } = await supabase
         .from('teacher_notes')
         .select('*')
         .eq('student_id', stds.id)
         .single();
 
-      // Ambil arsip soal dikerjakan
       const { data: subs } = await supabase
         .from('submissions')
         .select('*')
@@ -88,8 +90,6 @@ export default function App() {
 
       const { data: allExams } = await supabase.from('exams').select('*');
 
-      // Hitung total kehadiran bulan berjalan dari tabel attendance jika ada, atau simulasi data aman
-      // Di sini kita cek data kehadiran berdasarkan format penyimpanan harian
       const { data: attendanceTable } = await supabase
         .from('attendance')
         .select('*')
@@ -114,13 +114,14 @@ export default function App() {
         if (!ex) return null;
         return {
           id: sub.id,
-          subject: ex.subject,
-          date: sub.date,
-          title: ex.title,
-          score: sub.score,
+          subject: ex.subject || 'Umum',
+          date: sub.date || 'Baru saja',
+          title: ex.title || 'Latihan Soal',
+          score: sub.score || 0,
+          results: sub.results || [],
           questions: (ex.questions || []).map(q => {
             const res = (sub.results || []).find(r => r.no === q.no);
-            return { ...q, status: res ? res.status : 'correct' };
+            return { ...q, status: res ? res.status : 'correct', studentAnswer: res ? res.answer : '-' };
           })
         };
       }).filter(Boolean);
@@ -148,15 +149,71 @@ export default function App() {
     }
   };
 
-  if (soalCodeParam && !studentData) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <div className="bg-white p-6 rounded-2xl border text-center space-y-3">
-          <p className="text-xs text-slate-600">Memuat arsip soal...</p>
-        </div>
-      </div>
-    );
-  }
+  const handleOpenSoalNewTab = () => {
+    const newTabUrl = `${window.location.origin}${window.location.pathname}?soal=${loggedInCode}`;
+    window.open(newTabUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleDownloadReport = (exam) => {
+    // Fungsi unduh/cetak rekap pengerjaan soal
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+    
+    const htmlContent = `
+      <html>
+        <head>
+          <title>Laporan Hasil Latihan - ${studentData?.name}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; color: #333; }
+            h2 { color: #4338ca; margin-bottom: 5px; }
+            .meta { margin-bottom: 20px; font-size: 14px; color: #555; }
+            .score-box { background: #e0e7ff; padding: 10px 15px; border-radius: 8px; font-weight: bold; display: inline-block; margin-bottom: 15px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+            th, td { border: 1px solid #cbd5e1; padding: 8px 12px; font-size: 13px; text-align: left; }
+            th { background: #f1f5f9; }
+          </style>
+        </head>
+        <body>
+          <h2>Bimbel Albita - Laporan Hasil Belajar</h2>
+          <div class="meta">
+            <p><strong>Nama Siswa:</strong> ${studentData?.name} (${studentData?.class})</p>
+            <p><strong>Materi / Paket:</strong> ${exam.title} (${exam.subject})</p>
+            <p><strong>Tanggal Pengerjaan:</strong> ${exam.date}</p>
+          </div>
+          <div class="score-box">Nilai Akhir: ${exam.score} / 100</div>
+          <h3>Detail Jawaban Soal:</h3>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 50px;">No</th>
+                <th>Pertanyaan</th>
+                <th style="width: 100px;">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${exam.questions.map(q => `
+                <tr>
+                  <td>${q.no}</td>
+                  <td>${q.question || 'Soal Latihan'}</td>
+                  <td><b>${q.status === 'correct' ? 'Benar' : 'Salah'}</b></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+          <script>window.print();</script>
+        </body>
+      </html>
+    `;
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+  };
+
+  const handleParentSendText = (e) => {
+    e.preventDefault();
+    if (!parentTextInput.trim()) return;
+    setSentMessages([{ id: Date.now(), type: 'Teks', content: parentTextInput }, ...sentMessages]);
+    setParentTextInput('');
+  };
 
   if (!loggedInCode) {
     return (
@@ -197,20 +254,8 @@ export default function App() {
     );
   }
 
-  const handleOpenSoalNewTab = () => {
-    const newTabUrl = `${window.location.origin}${window.location.pathname}?soal=${loggedInCode}`;
-    window.open(newTabUrl, '_blank', 'noopener,noreferrer');
-  };
-
-  const handleParentSendText = (e) => {
-    e.preventDefault();
-    if (!parentTextInput.trim()) return;
-    setSentMessages([{ id: Date.now(), type: 'Teks', content: parentTextInput }, ...sentMessages]);
-    setParentTextInput('');
-  };
-
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col">
+    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col relative">
       <header className="bg-indigo-950 text-white border-b border-indigo-900 sticky top-0 z-30 shadow-sm">
         <div className="max-w-4xl mx-auto px-4 py-3.5 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -259,34 +304,60 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between pt-1">
-            <span className="text-xs text-slate-500">
-              Arsip soal yang sudah dikerjakan ({studentData?.completedExams.length} Paket)
-            </span>
-            <button
-              onClick={handleOpenSoalNewTab}
-              className="px-4 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
-            >
-              Lihat Soal <ExternalLink className="w-3.5 h-3.5" />
-            </button>
+          {/* Daftar Paket Soal yang Dikerjakan */}
+          <div className="space-y-3 pt-2">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Riwayat Pengerjaan Soal & Latihan</h3>
+            {studentData?.completedExams.length === 0 ? (
+              <p className="text-xs text-slate-400 italic py-2">Belum ada riwayat soal yang dikerjakan bulan ini.</p>
+            ) : (
+              <div className="space-y-2">
+                {studentData.completedExams.map((exam) => (
+                  <div key={exam.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-white transition-all">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-slate-900">{exam.title}</span>
+                        <span className="text-[10px] font-bold bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded">{exam.subject}</span>
+                      </div>
+                      <span className="text-xs text-slate-500">Tanggal: {exam.date} • Nilai: <strong className="text-indigo-600">{exam.score}</strong></span>
+                    </div>
+
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <button
+                        onClick={() => setSelectedExamDetail(exam)}
+                        className="flex-1 sm:flex-none px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm"
+                      >
+                        <Maximize2 className="w-3.5 h-3.5" /> View / Perbesar
+                      </button>
+                      <button
+                        onClick={() => handleDownloadReport(exam)}
+                        className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5"
+                        title="Download / Cetak Laporan"
+                      >
+                        <Download className="w-3.5 h-3.5" /> Download
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Informasi Kehadiran / Hari Les Bulan Ini */}
+        {/* Informasi Kehadiran Bulan Ini */}
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <div className="flex items-center gap-2">
               <CalendarIcon className="w-5 h-5 text-indigo-600" />
               <h2 className="font-bold text-base text-slate-900">Rekap Kehadiran Bulan {currentMonthName}</h2>
             </div>
-            <span className="text-xs font-semibold text-slate-500">Target: ~16 Sesi / Bulan</span>
+            <span className="text-xs font-semibold text-slate-500">Jadwal: Senin - Kamis</span>
           </div>
 
           <div className="grid grid-cols-3 gap-3">
             <div className="bg-emerald-50 border border-emerald-200 p-3.5 rounded-xl text-center">
               <span className="block text-[11px] font-semibold text-emerald-700 uppercase">Hadir</span>
               <span className="text-2xl font-extrabold text-emerald-800">{studentData?.attendanceStats?.hadir || 0}</span>
-              <span className="block text-[10px] text-emerald-600 mt-0.5">Hari / Pertemuan</span>
+              <span className="block text-[10px] text-emerald-600 mt-0.5">Hari</span>
             </div>
             <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-xl text-center">
               <span className="block text-[11px] font-semibold text-amber-700 uppercase">Izin</span>
@@ -317,50 +388,62 @@ export default function App() {
             "{studentData?.teacherNoteText}"
           </div>
         </div>
-
-        {/* Komunikasi dengan Pengajar */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
-          <div>
-            <h2 className="font-bold text-base text-slate-900 flex items-center gap-2">
-              <MessageSquare className="w-5 h-5 text-indigo-600" /> Hubungi Pengajar Albita
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5">Kirim pesan teks atau rekam suara untuk konsultasi atau izin.</p>
-          </div>
-
-          <form onSubmit={handleParentSendText} className="flex flex-col sm:flex-row gap-2.5">
-            <input
-              type="text"
-              placeholder="Tulis pesan untuk pengajar..."
-              value={parentTextInput}
-              onChange={(e) => setParentTextInput(e.target.value)}
-              className="flex-1 px-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:border-indigo-600"
-            />
-            <div className="flex gap-2">
-              <button type="submit" className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm">
-                <Send className="w-4 h-4" /> Kirim
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsRecordingVoice(!isRecordingVoice)}
-                className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5 ${isRecordingVoice ? 'bg-rose-600 text-white animate-pulse' : 'bg-slate-800 text-white'}`}
-              >
-                <Mic className="w-4 h-4" /> {isRecordingVoice ? 'Stop Rekam' : 'Voice Note'}
-              </button>
-            </div>
-          </form>
-
-          {sentMessages.length > 0 && (
-            <div className="space-y-2 pt-2">
-              {sentMessages.map((m) => (
-                <div key={m.id} className="p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-900 flex items-center justify-between">
-                  <div><strong>[{m.type}]</strong> {m.content}</div>
-                  <span className="text-[11px] text-indigo-700 flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Terkirim</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
       </main>
+
+      {/* MODAL / POPUP VIEW DETAIL SOAL YANG DIPERBESAR */}
+      {selectedExamDetail && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-2xl rounded-2xl shadow-xl border border-slate-200 flex flex-col max-h-[90vh]">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-indigo-50/50 rounded-t-2xl">
+              <div>
+                <h3 className="font-bold text-base text-slate-900">{selectedExamDetail.title}</h3>
+                <p className="text-xs text-slate-500">Mata Pelajaran: {selectedExamDetail.subject} • Nilai: <strong className="text-indigo-600">{selectedExamDetail.score}</strong></p>
+              </div>
+              <button
+                onClick={() => setSelectedExamDetail(null)}
+                className="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-900 shadow-sm"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4 flex-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Rincian Pertanyaan & Jawaban</span>
+                <button
+                  onClick={() => handleDownloadReport(selectedExamDetail)}
+                  className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold flex items-center gap-1.5 border border-indigo-200"
+                >
+                  <Download className="w-3.5 h-3.5" /> Download Laporan Ini
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                {selectedExamDetail.questions.map((q, idx) => (
+                  <div key={idx} className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-600">Soal No. {q.no}</span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${q.status === 'correct' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                        {q.status === 'correct' ? 'Benar' : 'Salah'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-800 font-medium">{q.question || `Pertanyaan nomor ${q.no}`}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex justify-end">
+              <button
+                onClick={() => setSelectedExamDetail(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold shadow-sm"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
