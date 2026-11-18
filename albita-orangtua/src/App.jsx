@@ -13,7 +13,9 @@ import {
   Calendar as CalendarIcon,
   Download,
   X,
-  Maximize2
+  Maximize2,
+  Clock,
+  Upload
 } from 'lucide-react';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
@@ -116,12 +118,13 @@ export default function App() {
           id: sub.id,
           subject: ex.subject || 'Umum',
           date: sub.date || 'Baru saja',
+          uploadDate: ex.upload_date || ex.uploadDate || 'Baru saja',
           title: ex.title || 'Latihan Soal',
           score: sub.score || 0,
           results: sub.results || [],
           questions: (ex.questions || []).map(q => {
             const res = (sub.results || []).find(r => r.no === q.no);
-            return { ...q, status: res ? res.status : 'correct', studentAnswer: res ? res.answer : '-' };
+            return { ...q, text: q.text || q.question, status: res ? res.status : 'correct', studentAnswer: res ? res.answer : '-' };
           })
         };
       }).filter(Boolean);
@@ -155,7 +158,6 @@ export default function App() {
   };
 
   const handleDownloadReport = (exam) => {
-    // Fungsi unduh/cetak rekap pengerjaan soal
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
     
@@ -178,7 +180,8 @@ export default function App() {
           <div class="meta">
             <p><strong>Nama Siswa:</strong> ${studentData?.name} (${studentData?.class})</p>
             <p><strong>Materi / Paket:</strong> ${exam.title} (${exam.subject})</p>
-            <p><strong>Tanggal Pengerjaan:</strong> ${exam.date}</p>
+            <p><strong>Tanggal Upload Soal:</strong> ${exam.uploadDate}</p>
+            <p><strong>Tanggal Pengerjaan/Scan:</strong> ${exam.date}</p>
           </div>
           <div class="score-box">Nilai Akhir: ${exam.score} / 100</div>
           <h3>Detail Jawaban Soal:</h3>
@@ -194,7 +197,7 @@ export default function App() {
               ${exam.questions.map(q => `
                 <tr>
                   <td>${q.no}</td>
-                  <td>${q.question || 'Soal Latihan'}</td>
+                  <td>${q.text || 'Soal Latihan'}</td>
                   <td><b>${q.status === 'correct' ? 'Benar' : 'Salah'}</b></td>
                 </tr>
               `).join('')}
@@ -264,7 +267,7 @@ export default function App() {
             </div>
             <div>
               <span className="text-[10px] uppercase tracking-wider font-semibold text-indigo-300">
-                Portal Orang Tua • Bimbel Albita
+                Portal Orang Tua • Bimbel Albita (View-Only)
               </span>
               <h1 className="font-bold text-base sm:text-lg leading-tight">
                 {studentData?.name} ({studentData?.class})
@@ -304,21 +307,29 @@ export default function App() {
             </div>
           </div>
 
-          {/* Daftar Paket Soal yang Dikerjakan */}
+          {/* Daftar Paket Soal & Tanggal Upload */}
           <div className="space-y-3 pt-2">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Riwayat Pengerjaan Soal & Latihan</h3>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Riwayat Pengerjaan Soal & Tanggal Upload</h3>
             {studentData?.completedExams.length === 0 ? (
               <p className="text-xs text-slate-400 italic py-2">Belum ada riwayat soal yang dikerjakan bulan ini.</p>
             ) : (
               <div className="space-y-2">
                 {studentData.completedExams.map((exam) => (
                   <div key={exam.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-white transition-all">
-                    <div>
+                    <div className="space-y-1">
                       <div className="flex items-center gap-2">
                         <span className="font-bold text-sm text-slate-900">{exam.title}</span>
                         <span className="text-[10px] font-bold bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded">{exam.subject}</span>
                       </div>
-                      <span className="text-xs text-slate-500">Tanggal: {exam.date} • Nilai: <strong className="text-indigo-600">{exam.score}</strong></span>
+                      <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+                        <span className="flex items-center gap-1">
+                          <Upload className="w-3 h-3 text-indigo-600" /> Diupload: <strong>{exam.uploadDate}</strong>
+                        </span>
+                        <span>•</span>
+                        <span>Scan: {exam.date}</span>
+                        <span>•</span>
+                        <span>Nilai: <strong className="text-indigo-600">{exam.score}</strong></span>
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -397,7 +408,7 @@ export default function App() {
             <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-indigo-50/50 rounded-t-2xl">
               <div>
                 <h3 className="font-bold text-base text-slate-900">{selectedExamDetail.title}</h3>
-                <p className="text-xs text-slate-500">Mata Pelajaran: {selectedExamDetail.subject} • Nilai: <strong className="text-indigo-600">{selectedExamDetail.score}</strong></p>
+                <p className="text-xs text-slate-500">Mata Pelajaran: {selectedExamDetail.subject} • Dibuat: {selectedExamDetail.uploadDate} • Nilai: <strong className="text-indigo-600">{selectedExamDetail.score}</strong></p>
               </div>
               <button
                 onClick={() => setSelectedExamDetail(null)}
@@ -427,7 +438,7 @@ export default function App() {
                         {q.status === 'correct' ? 'Benar' : 'Salah'}
                       </span>
                     </div>
-                    <p className="text-xs text-slate-800 font-medium">{q.question || `Pertanyaan nomor ${q.no}`}</p>
+                    <p className="text-xs text-slate-800 font-medium">{q.text || q.question || `Pertanyaan nomor ${q.no}`}</p>
                   </div>
                 ))}
               </div>
