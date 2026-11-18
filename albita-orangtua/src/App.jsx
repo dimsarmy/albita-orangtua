@@ -9,7 +9,8 @@ import {
   ShieldCheck,
   LogOut,
   ExternalLink,
-  FileText
+  FileText,
+  Calendar as CalendarIcon
 } from 'lucide-react';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
@@ -87,6 +88,27 @@ export default function App() {
 
       const { data: allExams } = await supabase.from('exams').select('*');
 
+      // Hitung total kehadiran bulan berjalan dari tabel attendance jika ada, atau simulasi data aman
+      // Di sini kita cek data kehadiran berdasarkan format penyimpanan harian
+      const { data: attendanceTable } = await supabase
+        .from('attendance')
+        .select('*')
+        .eq('student_id', stds.id);
+
+      let totalHadirBulanIni = 0;
+      let totalIzinBulanIni = 0;
+      let totalTidakHadirBulanIni = 0;
+
+      if (attendanceTable && attendanceTable.length > 0) {
+        attendanceTable.forEach(att => {
+          if (att.date && att.date.startsWith(currentMonthKey)) {
+            if (att.status === 'Hadir') totalHadirBulanIni++;
+            if (att.status === 'Izin') totalIzinBulanIni++;
+            if (att.status === 'Tidak Hadir') totalTidakHadirBulanIni++;
+          }
+        });
+      }
+
       const mappedExams = (subs || []).map(sub => {
         const ex = (allExams || []).find(e => e.id === sub.exam_id);
         if (!ex) return null;
@@ -110,7 +132,12 @@ export default function App() {
         paymentStatus: pay ? pay.status : (stds.payment_status || 'Belum Lunas'),
         teacherNoteMonth: note ? note.month : currentMonthName,
         teacherNoteText: note ? note.note : 'Belum ada catatan khusus dari pengajar bulan ini.',
-        completedExams: mappedExams
+        completedExams: mappedExams,
+        attendanceStats: {
+          hadir: totalHadirBulanIni,
+          izin: totalIzinBulanIni,
+          tidakHadir: totalTidakHadirBulanIni
+        }
       });
 
       setLoggedInCode(formattedCode);
@@ -121,9 +148,7 @@ export default function App() {
     }
   };
 
-  // Jika membuka tab pratinjau soal khusus
   if (soalCodeParam && !studentData) {
-    // Auto trigger login ringan untuk tab soal
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="bg-white p-6 rounded-2xl border text-center space-y-3">
@@ -212,6 +237,7 @@ export default function App() {
       </header>
 
       <main className="max-w-4xl w-full mx-auto px-4 py-6 flex-1 space-y-6">
+        {/* Ringkasan Profil & Status SPP */}
         <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div className="flex items-center gap-2.5">
@@ -246,6 +272,36 @@ export default function App() {
           </div>
         </div>
 
+        {/* Informasi Kehadiran / Hari Les Bulan Ini */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2">
+              <CalendarIcon className="w-5 h-5 text-indigo-600" />
+              <h2 className="font-bold text-base text-slate-900">Rekap Kehadiran Bulan {currentMonthName}</h2>
+            </div>
+            <span className="text-xs font-semibold text-slate-500">Target: ~16 Sesi / Bulan</span>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-emerald-50 border border-emerald-200 p-3.5 rounded-xl text-center">
+              <span className="block text-[11px] font-semibold text-emerald-700 uppercase">Hadir</span>
+              <span className="text-2xl font-extrabold text-emerald-800">{studentData?.attendanceStats?.hadir || 0}</span>
+              <span className="block text-[10px] text-emerald-600 mt-0.5">Hari / Pertemuan</span>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-xl text-center">
+              <span className="block text-[11px] font-semibold text-amber-700 uppercase">Izin</span>
+              <span className="text-2xl font-extrabold text-amber-800">{studentData?.attendanceStats?.izin || 0}</span>
+              <span className="block text-[10px] text-amber-600 mt-0.5">Hari</span>
+            </div>
+            <div className="bg-rose-50 border border-rose-200 p-3.5 rounded-xl text-center">
+              <span className="block text-[11px] font-semibold text-rose-700 uppercase">Tidak Hadir</span>
+              <span className="text-2xl font-extrabold text-rose-800">{studentData?.attendanceStats?.tidakHadir || 0}</span>
+              <span className="block text-[10px] text-rose-600 mt-0.5">Hari</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Catatan Guru */}
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-3">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <div className="flex items-center gap-2">
@@ -262,6 +318,7 @@ export default function App() {
           </div>
         </div>
 
+        {/* Komunikasi dengan Pengajar */}
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
           <div>
             <h2 className="font-bold text-base text-slate-900 flex items-center gap-2">
