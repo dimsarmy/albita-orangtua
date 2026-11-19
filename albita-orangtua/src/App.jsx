@@ -1,20 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import {
-  CheckCircle2,
-  Mic,
-  Send,
-  Eye,
-  MessageSquare,
-  ShieldCheck,
-  LogOut,
-  ExternalLink,
-  FileText,
   Calendar as CalendarIcon,
   Download,
   X,
   Maximize2,
-  Clock,
+  FileText,
+  ShieldCheck,
+  LogOut,
   Upload
 } from 'lucide-react';
 
@@ -32,13 +25,10 @@ export default function App() {
   const soalCodeParam = urlParams.get('soal');
 
   const [accessInput, setAccessInput] = useState('');
-  const [loggedInCode, setLoggedInCode] = useState(soalCodeParam || null);
+  const [loggedInCode, setLoggedInCode] = useState(soalCodeParam ? soalCodeParam.trim().toUpperCase() : null);
   const [loginError, setLoginError] = useState('');
+  const [isLoadingData, setIsLoadingData] = useState(false);
   const [studentData, setStudentData] = useState(null);
-
-  const [parentTextInput, setParentTextInput] = useState('');
-  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
-  const [sentMessages, setSentMessages] = useState([]);
 
   // State untuk modal Preview / View Soal yang diperbesar
   const [selectedExamDetail, setSelectedExamDetail] = useState(null);
@@ -46,6 +36,187 @@ export default function App() {
   const now = new Date();
   const currentMonthName = MONTHS_ID[now.getMonth()];
   const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  // Fungsi terpusat untuk mengambil & memetakan seluruh data siswa dari Supabase
+  const syncStudentDashboard = useCallback(async (targetCode, isInitialLogin = false) => {
+    if (!supabase || !targetCode) return;
+
+    if (isInitialLogin) {
+      setIsLoadingData(true);
+      setLoginError('');
+    }
+
+    try {
+      const { data: std, error } = await supabase
+        .from('students')
+        .select('*')
+        .eq('access_code', targetCode)
+        .maybeSingle();
+
+      if (error || !std) {
+        if (isInitialLogin) {
+          setLoginError('Kode akses tidak ditemukan atau belum terdaftar di sistem.');
+          setIsLoadingData(false);
+        }
+        return;
+      }
+
+      const [
+        { data: pay },
+        { data: note },
+        { data: subs },
+        { data: allExams },
+        { data: attendanceTable }
+      ] = await Promise.all([
+        supabase
+          .from('payments')
+          .select('status')
+          .eq('month_key', currentMonthKey)
+          .eq('student_id', std.id)
+          .maybeSingle(),
+        supabase
+          .from('teacher_notes')
+          .select('*')
+          .eq('student_id', std.id)
+          .order('id', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('submissions')
+          .select('*')
+          .eq('student_id', std.id),
+        supabase
+          .from('exams')
+          .select('*'),
+        supabase
+          .from('attendance')
+          .select('*')
+          .eq('student_id', std.id)
+      ]);
+
+      let totalHadirBulanIni = 0;
+      let totalIzinBulanIni = 0;
+      let totalTidakHadirBulanIni = 0;
+
+      if (attendanceTable && attendanceTable.length > 0) {
+        attendanceTable.forEach((att) => {
+          const dateVal = att.date_key || att.date || '';
+          if (String(dateVal).startsWith(currentMonthKey)) {
+            if (att.status === 'Hadir') totalHadirBulanIni++;
+            if (att.status === 'Izin') totalIzinBulanIni++;
+            if (att.status === 'Tidak Hadir') totalTidakHadirBulanIni++;
+          }
+        });
+      }
+
+      const mappedExams = (subs || [])
+        .map((sub) => {
+          const ex = (allExams || []).find((e) => e.id === sub.exam_id);
+          if (!ex) return null;
+          return {
+            id: sub.id,
+            subject: ex.subject || 'Umum',
+            date: sub.date || 'Baru saja',
+            uploadDate: ex.upload_date || ex.uploadDate || 'Baru saja',
+            title: ex.title || 'Latihan Soal',
+            score: sub.score ?? 0,
+            results: sub.results || [],
+            questions: (ex.questions || []).map((q) => {
+              const res = (sub.results || []).find((r) => r.no === q.no);
+              return {
+                ...q,
+                text: q.text || q.question,
+                status: res ? res.status : 'correct',
+                studentAnswer: res ? res.answer : '-'
+              };
+            })
+          };
+        })
+        .filter(Boolean);
+
+      setStudentData({
+        id: std.id,
+        name: std.name,
+        class: std.class || '6 SD',
+        paymentStatus: pay ? pay.status : (std.payment_status || 'Belum Lunas'),
+        teacherNoteMonth: note ? note.month : currentMonthName,
+        teacherNoteText: note ? note.note : 'Belum ada catatan khusus dari pengajar bulan ini.',
+        completedExams: mappedExams,
+        attendanceStats: {
+          hadir: totalHadirBulanIni,
+          izin: totalIzinBulanIni,
+          tidakHadir: totalTidakHadirBulanIni
+        }
+      });
+
+      setLoggedInCode(targetCode);
+      setLoginError('');
+    } catch (err) {
+      console.error('Gagal sinkronisasi data orang tua:', err);
+      if (isInitialLogin) {
+        setLoginError('Terjadi kesalahan saat menghubungkan ke database.');
+      }
+    } finally {
+      if (isInitialLogin) {
+        setIsLoadingData(false);
+      }
+    }
+  }, [currentMonthKey, currentMonthName]);
+
+  // Load awal jika sudah ada kode akses (misalnya dari URL ?soal=...)
+  useEffect(() => {
+    if (loggedInCode) {
+      syncStudentDashboard(loggedInCode, true);
+    }
+  }, [loggedInCode, syncStudentDashboard]);
+
+  // Pasang Realtime subscription agar perubahan dari albita-pengajar langsung masuk ke dashboard orang tua
+  useEffect(() => {
+    if (!supabase || !studentData?.id || !loggedInCode) return;
+
+    const studentId = studentData.id;
+    const refreshDashboard = () => {
+      syncStudentDashboard(loggedInCode, false);
+    };
+
+    const parentRealtimeChannel = supabase
+      .channel(`parent-sync-${studentId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'attendance', filter: `student_id=eq.${studentId}` },
+        refreshDashboard
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'payments', filter: `student_id=eq.${studentId}` },
+        refreshDashboard
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'submissions', filter: `student_id=eq.${studentId}` },
+        refreshDashboard
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'teacher_notes', filter: `student_id=eq.${studentId}` },
+        refreshDashboard
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'students', filter: `id=eq.${studentId}` },
+        refreshDashboard
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'exams' },
+        refreshDashboard
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(parentRealtimeChannel);
+    };
+  }, [studentData?.id, loggedInCode, syncStudentDashboard]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -60,107 +231,13 @@ export default function App() {
       return;
     }
 
-    try {
-      const { data: stds, error } = await supabase
-        .from('students')
-        .select('*')
-        .eq('access_code', formattedCode)
-        .single();
-
-      if (error || !stds) {
-        setLoginError('Kode akses tidak ditemukan atau belum terdaftar di sistem.');
-        return;
-      }
-
-      const { data: pay } = await supabase
-        .from('payments')
-        .select('status')
-        .eq('month_key', currentMonthKey)
-        .eq('student_id', stds.id)
-        .single();
-
-      const { data: note } = await supabase
-        .from('teacher_notes')
-        .select('*')
-        .eq('student_id', stds.id)
-        .single();
-
-      const { data: subs } = await supabase
-        .from('submissions')
-        .select('*')
-        .eq('student_id', stds.id);
-
-      const { data: allExams } = await supabase.from('exams').select('*');
-
-      const { data: attendanceTable } = await supabase
-        .from('attendance')
-        .select('*')
-        .eq('student_id', stds.id);
-
-      let totalHadirBulanIni = 0;
-      let totalIzinBulanIni = 0;
-      let totalTidakHadirBulanIni = 0;
-
-      if (attendanceTable && attendanceTable.length > 0) {
-        attendanceTable.forEach(att => {
-          if (att.date && att.date.startsWith(currentMonthKey)) {
-            if (att.status === 'Hadir') totalHadirBulanIni++;
-            if (att.status === 'Izin') totalIzinBulanIni++;
-            if (att.status === 'Tidak Hadir') totalTidakHadirBulanIni++;
-          }
-        });
-      }
-
-      const mappedExams = (subs || []).map(sub => {
-        const ex = (allExams || []).find(e => e.id === sub.exam_id);
-        if (!ex) return null;
-        return {
-          id: sub.id,
-          subject: ex.subject || 'Umum',
-          date: sub.date || 'Baru saja',
-          uploadDate: ex.upload_date || ex.uploadDate || 'Baru saja',
-          title: ex.title || 'Latihan Soal',
-          score: sub.score || 0,
-          results: sub.results || [],
-          questions: (ex.questions || []).map(q => {
-            const res = (sub.results || []).find(r => r.no === q.no);
-            return { ...q, text: q.text || q.question, status: res ? res.status : 'correct', studentAnswer: res ? res.answer : '-' };
-          })
-        };
-      }).filter(Boolean);
-
-      setStudentData({
-        id: stds.id,
-        name: stds.name,
-        class: stds.class || '6 SD',
-        paymentStatus: pay ? pay.status : (stds.payment_status || 'Belum Lunas'),
-        teacherNoteMonth: note ? note.month : currentMonthName,
-        teacherNoteText: note ? note.note : 'Belum ada catatan khusus dari pengajar bulan ini.',
-        completedExams: mappedExams,
-        attendanceStats: {
-          hadir: totalHadirBulanIni,
-          izin: totalIzinBulanIni,
-          tidakHadir: totalTidakHadirBulanIni
-        }
-      });
-
-      setLoggedInCode(formattedCode);
-      setLoginError('');
-    } catch (err) {
-      console.error(err);
-      setLoginError('Terjadi kesalahan saat menghubungkan ke database.');
-    }
-  };
-
-  const handleOpenSoalNewTab = () => {
-    const newTabUrl = `${window.location.origin}${window.location.pathname}?soal=${loggedInCode}`;
-    window.open(newTabUrl, '_blank', 'noopener,noreferrer');
+    await syncStudentDashboard(formattedCode, true);
   };
 
   const handleDownloadReport = (exam) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
-    
+
     const htmlContent = `
       <html>
         <head>
@@ -194,7 +271,7 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
-              ${exam.questions.map(q => `
+              ${exam.questions.map((q) => `
                 <tr>
                   <td>${q.no}</td>
                   <td>${q.text || 'Soal Latihan'}</td>
@@ -211,14 +288,7 @@ export default function App() {
     printWindow.document.close();
   };
 
-  const handleParentSendText = (e) => {
-    e.preventDefault();
-    if (!parentTextInput.trim()) return;
-    setSentMessages([{ id: Date.now(), type: 'Teks', content: parentTextInput }, ...sentMessages]);
-    setParentTextInput('');
-  };
-
-  if (!loggedInCode) {
+  if (!loggedInCode || (!studentData && isLoadingData)) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col justify-center items-center p-4">
         <div className="max-w-md w-full bg-white rounded-3xl border border-slate-200 p-7 shadow-sm space-y-6">
@@ -243,8 +313,12 @@ export default function App() {
               />
               {loginError && <p className="text-xs text-rose-600 mt-1.5 font-medium">{loginError}</p>}
             </div>
-            <button type="submit" className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-sm transition-all">
-              Buka Laporan Perkembangan Anak
+            <button
+              type="submit"
+              disabled={isLoadingData}
+              className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white rounded-xl text-sm font-bold shadow-sm transition-all"
+            >
+              {isLoadingData ? 'Menyinkronkan Data...' : 'Buka Laporan Perkembangan Anak'}
             </button>
           </form>
 
@@ -267,7 +341,7 @@ export default function App() {
             </div>
             <div>
               <span className="text-[10px] uppercase tracking-wider font-semibold text-indigo-300">
-                Portal Orang Tua • Bimbel Albita (View-Only)
+                Portal Orang Tua • Bimbel Albita (Realtime View-Only)
               </span>
               <h1 className="font-bold text-base sm:text-lg leading-tight">
                 {studentData?.name} ({studentData?.class})
