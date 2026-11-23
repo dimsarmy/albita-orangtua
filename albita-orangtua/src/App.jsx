@@ -8,7 +8,12 @@ import {
   FileText,
   ShieldCheck,
   LogOut,
-  Upload
+  Upload,
+  Award,
+  Sparkles,
+  CheckCircle2,
+  AlertCircle,
+  BookOpen
 } from 'lucide-react';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
@@ -66,7 +71,8 @@ export default function App() {
         { data: note },
         { data: subs },
         { data: allExams },
-        { data: attendanceTable }
+        { data: attendanceTable },
+        { data: evalsData }
       ] = await Promise.all([
         supabase
           .from('payments')
@@ -91,7 +97,12 @@ export default function App() {
         supabase
           .from('attendance')
           .select('*')
+          .eq('student_id', std.id),
+        supabase
+          .from('evaluations')
+          .select('*')
           .eq('student_id', std.id)
+          .order('created_at', { ascending: false })
       ]);
 
       let totalHadirBulanIni = 0;
@@ -134,6 +145,34 @@ export default function App() {
         })
         .filter(Boolean);
 
+      // Pemetaan data evaluasi untuk siswa ini
+      const mappedEvals = (evalsData || []).map((e) => ({
+        id: e.id,
+        evalType: e.eval_type || e.evalType,
+        dateKey: e.date_key || e.dateKey,
+        monthKey: e.month_key || e.monthKey,
+        studentId: e.student_id || e.studentId,
+        summaryText: e.summary_text || e.summaryText,
+        weakTopics: Array.isArray(e.weak_topics)
+          ? e.weak_topics
+          : (typeof e.weak_topics === 'string' && e.weak_topics.startsWith('[')
+              ? JSON.parse(e.weak_topics)
+              : (e.weak_topics ? [e.weak_topics] : [])),
+        examTitle: e.exam_title || e.examTitle || '',
+        createdAt: e.created_at || e.createdAt
+      }));
+
+      // Filter berdasarkan bulan berjalan (month_key atau dateKey berawalan currentMonthKey)
+      const currentMonthEvals = mappedEvals.filter((e) =>
+        e.monthKey === currentMonthKey || (e.dateKey && String(e.dateKey).startsWith(currentMonthKey))
+      );
+
+      // Laporan Evaluasi Akhir Bulan (eval_type: 'monthly_summary')
+      const monthlyReport = currentMonthEvals.find((e) => e.evalType === 'monthly_summary') || null;
+
+      // Riwayat Evaluasi Harian & Pembetulan
+      const historyEvaluations = currentMonthEvals.filter((e) => e.evalType !== 'monthly_summary');
+
       setStudentData({
         id: std.id,
         name: std.name,
@@ -146,7 +185,9 @@ export default function App() {
           hadir: totalHadirBulanIni,
           izin: totalIzinBulanIni,
           tidakHadir: totalTidakHadirBulanIni
-        }
+        },
+        monthlyReport: monthlyReport,
+        evaluationsHistory: historyEvaluations
       });
 
       setLoggedInCode(targetCode);
@@ -209,6 +250,11 @@ export default function App() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'exams' },
+        refreshDashboard
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'evaluations', filter: `student_id=eq.${studentId}` },
         refreshDashboard
       )
       .subscribe();
@@ -275,7 +321,7 @@ export default function App() {
                 <tr>
                   <td>${q.no}</td>
                   <td>${q.text || 'Soal Latihan'}</td>
-                  <td><b>${q.status === 'correct' ? 'Benar' : 'Salah'}</b></td>
+                  <td><b>${q.status === 'correct' ? 'Benar' : (q.status === 'corrected' ? 'Sudah Dibenarkan' : 'Perlu Latihan')}</b></td>
                 </tr>
               `).join('')}
             </tbody>
@@ -428,6 +474,129 @@ export default function App() {
           </div>
         </div>
 
+        {/* BAGIAN BARU: EVALUASI BELAJAR & PERKEMBANGAN ANAK (REALTIME DARI SUPABASE) */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2">
+              <Award className="w-5 h-5 text-indigo-600" />
+              <h2 className="font-bold text-base text-slate-900">Evaluasi Belajar & Perkembangan Anak</h2>
+            </div>
+            <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100">
+              Periode {currentMonthName}
+            </span>
+          </div>
+
+          {/* 1. Laporan Evaluasi Akhir Bulan (Tampilan Menonjol Paling Atas Jika Sudah Ada) */}
+          {studentData?.monthlyReport ? (
+            <div className="bg-gradient-to-br from-indigo-900 via-indigo-950 to-slate-950 text-white p-5 sm:p-6 rounded-2xl border border-indigo-800 shadow-md space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-indigo-800/80 pb-3">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-amber-300" />
+                  <h3 className="font-bold text-sm sm:text-base text-white">
+                    Laporan Evaluasi Akhir Bulan (Pengajar)
+                  </h3>
+                </div>
+                <span className="text-[11px] font-semibold text-indigo-200 bg-indigo-800/70 px-2.5 py-0.5 rounded-full border border-indigo-700">
+                  {currentMonthName}
+                </span>
+              </div>
+
+              <div className="text-xs sm:text-sm text-indigo-100/95 leading-relaxed whitespace-pre-wrap font-sans space-y-1">
+                {studentData.monthlyReport.summaryText}
+              </div>
+
+              <div className="pt-2 flex justify-between items-center text-[11px] text-indigo-300 border-t border-indigo-900/60">
+                <span>Bimbingan Belajar Albita</span>
+                <span>Tanggal Rangkuman: {studentData.monthlyReport.dateKey || '-'}</span>
+              </div>
+            </div>
+          ) : null}
+
+          {/* 2. Riwayat Evaluasi Harian & Progres Pembetulan */}
+          <div className="space-y-3">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+              <BookOpen className="w-4 h-4 text-indigo-600" /> Riwayat Evaluasi Harian & Progres Pembetulan
+            </h3>
+
+            {(!studentData?.evaluationsHistory || studentData.evaluationsHistory.length === 0) ? (
+              <div className="bg-slate-50 p-6 rounded-xl border border-slate-100 text-xs text-slate-500 text-center space-y-1">
+                <p className="font-medium text-slate-600">Belum ada catatan evaluasi khusus untuk bulan {currentMonthName}.</p>
+                <p className="text-[11px] text-slate-400">
+                  Catatan kelemahan konsep harian serta evaluasi saat anak berhasil menuntaskan soal pembetulan akan otomatis muncul di sini.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {studentData.evaluationsHistory.map((ev) => {
+                  const isCorrection = ev.evalType === 'correction';
+                  return (
+                    <div
+                      key={ev.id}
+                      className={`p-4 rounded-xl border transition-all space-y-2.5 ${
+                        isCorrection
+                          ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                          : 'bg-amber-50/70 border-amber-200 text-amber-950'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-black/5 pb-2">
+                        <div className="flex items-center gap-2">
+                          {isCorrection ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          ) : (
+                            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                          )}
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full font-bold text-[11px] border ${
+                              isCorrection
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                : 'bg-amber-100 text-amber-800 border-amber-300'
+                            }`}
+                          >
+                            {isCorrection
+                              ? 'Evaluasi Pembetulan • Tuntas & Meningkat'
+                              : 'Evaluasi Harian • Perlu Penguatan'}
+                          </span>
+                        </div>
+                        <span className="text-[11px] font-semibold text-slate-500">
+                          {ev.dateKey || '-'}
+                        </span>
+                      </div>
+
+                      {ev.examTitle && (
+                        <p className="text-xs font-bold text-slate-800">
+                          Materi / Paket: <span className="text-indigo-700">{ev.examTitle}</span>
+                        </p>
+                      )}
+
+                      <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">
+                        {ev.summaryText}
+                      </p>
+
+                      {ev.weakTopics && ev.weakTopics.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                          <span className="text-[10px] font-bold text-slate-500">Topik Materi:</span>
+                          {ev.weakTopics.map((top, idx) => (
+                            <span
+                              key={idx}
+                              className={`px-2 py-0.5 rounded font-semibold text-[10px] ${
+                                isCorrection
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-amber-100 text-amber-900'
+                              }`}
+                            >
+                              {top}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Informasi Kehadiran Bulan Ini */}
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
@@ -509,7 +678,7 @@ export default function App() {
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-slate-600">Soal No. {q.no}</span>
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${q.status === 'correct' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                        {q.status === 'correct' ? 'Benar' : 'Salah'}
+                        {q.status === 'correct' ? 'Benar' : (q.status === 'corrected' ? 'Sudah Dibenarkan' : 'Perlu Latihan')}
                       </span>
                     </div>
                     <p className="text-xs text-slate-800 font-medium">{q.text || q.question || `Pertanyaan nomor ${q.no}`}</p>
