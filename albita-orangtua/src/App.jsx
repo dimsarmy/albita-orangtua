@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import { jsPDF } from 'jspdf';
 import {
   Calendar as CalendarIcon,
   Download,
@@ -41,6 +42,92 @@ export default function App() {
   const now = new Date();
   const currentMonthName = MONTHS_ID[now.getMonth()];
   const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  // Helper format nama bulan dari monthKey / dateKey / fallback bulan aktif
+  const resolveMonthLabel = useCallback((monthKey, dateKey) => {
+    const raw = monthKey || (dateKey ? String(dateKey).slice(0, 7) : '');
+    if (raw && raw.includes('-')) {
+      const mIdx = parseInt(raw.split('-')[1], 10) - 1;
+      if (!Number.isNaN(mIdx) && MONTHS_ID[mIdx]) {
+        return MONTHS_ID[mIdx];
+      }
+    }
+    return currentMonthName;
+  }, [currentMonthName]);
+
+  // Download PDF untuk laporan evaluasi yang masuk (bulanan, harian, pembetulan)
+  const handleDownloadEvaluationPDF = useCallback((ev) => {
+    if (!studentData) return;
+
+    const monthLabel = resolveMonthLabel(ev?.monthKey, ev?.dateKey);
+    const titleHeader = `${studentData.name} - ${studentData.class} - Evaluasi ${monthLabel}`;
+
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
+    const margin = 15;
+    let y = 20;
+
+    // Judul utama sesuai format: Nama Siswa - Kelas - Evaluasi Nama Bulan
+    pdf.setFontSize(14);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setTextColor(30, 27, 75);
+    const titleLines = pdf.splitTextToSize(titleHeader, 180);
+    pdf.text(titleLines, margin, y);
+    y += titleLines.length * 7 + 2;
+
+    // Sub-header informasi laporan
+    pdf.setFontSize(9.5);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setTextColor(100, 116, 139);
+    const evalTypeLabel =
+      ev?.evalType === 'monthly_summary'
+        ? 'Laporan Evaluasi Akhir Bulan'
+        : ev?.evalType === 'correction'
+        ? 'Evaluasi Pembetulan'
+        : 'Evaluasi Harian';
+    const metaParts = [
+      `Jenis: ${evalTypeLabel}`,
+      ev?.dateKey ? `Tanggal: ${ev.dateKey}` : `Periode: ${monthLabel} ${now.getFullYear()}`,
+      ev?.examTitle ? `Materi/Paket: ${ev.examTitle}` : ''
+    ].filter(Boolean);
+    const metaLines = pdf.splitTextToSize(metaParts.join('  •  '), 180);
+    pdf.text(metaLines, margin, y);
+    y += metaLines.length * 5 + 3;
+
+    pdf.setDrawColor(203, 213, 225);
+    pdf.line(margin, y, 195, y);
+    y += 8;
+
+    // Isi laporan
+    pdf.setFontSize(10.5);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setTextColor(30, 41, 59);
+    const paragraphs = String(ev?.summaryText || '').trim().split('\n');
+
+    paragraphs.forEach((para) => {
+      const lines = pdf.splitTextToSize(para || ' ', 180);
+      if (y + lines.length * 5.8 > 275) {
+        pdf.addPage();
+        y = 20;
+      }
+      pdf.text(lines, margin, y);
+      y += lines.length * 5.8 + 2.5;
+    });
+
+    // Topik materi jika tersedia
+    if (Array.isArray(ev?.weakTopics) && ev.weakTopics.length > 0) {
+      if (y + 14 > 275) {
+        pdf.addPage();
+        y = 20;
+      }
+      y += 3;
+      pdf.setFontSize(9.5);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(67, 56, 202);
+      pdf.text(`Topik Materi: ${ev.weakTopics.join(', ')}`, margin, y);
+    }
+
+    pdf.save(`${titleHeader}.pdf`);
+  }, [studentData, resolveMonthLabel, now]);
 
   // Fungsi terpusat untuk mengambil & memetakan seluruh data siswa dari Supabase
   const syncStudentDashboard = useCallback(async (targetCode, isInitialLogin = false) => {
@@ -281,57 +368,46 @@ export default function App() {
   };
 
   const handleDownloadReport = (exam) => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
+    if (!studentData) return;
 
-    const htmlContent = `
-      <html>
-        <head>
-          <title>Laporan Hasil Latihan - ${studentData?.name}</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 20px; color: #333; }
-            h2 { color: #4338ca; margin-bottom: 5px; }
-            .meta { margin-bottom: 20px; font-size: 14px; color: #555; }
-            .score-box { background: #e0e7ff; padding: 10px 15px; border-radius: 8px; font-weight: bold; display: inline-block; margin-bottom: 15px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-            th, td { border: 1px solid #cbd5e1; padding: 8px 12px; font-size: 13px; text-align: left; }
-            th { background: #f1f5f9; }
-          </style>
-        </head>
-        <body>
-          <h2>Bimbel Albita - Laporan Hasil Belajar</h2>
-          <div class="meta">
-            <p><strong>Nama Siswa:</strong> ${studentData?.name} (${studentData?.class})</p>
-            <p><strong>Materi / Paket:</strong> ${exam.title} (${exam.subject})</p>
-            <p><strong>Tanggal Upload Soal:</strong> ${exam.uploadDate}</p>
-            <p><strong>Tanggal Pengerjaan/Scan:</strong> ${exam.date}</p>
-          </div>
-          <div class="score-box">Nilai Akhir: ${exam.score} / 100</div>
-          <h3>Detail Jawaban Soal:</h3>
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 50px;">No</th>
-                <th>Pertanyaan</th>
-                <th style="width: 100px;">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${exam.questions.map((q) => `
-                <tr>
-                  <td>${q.no}</td>
-                  <td>${q.text || 'Soal Latihan'}</td>
-                  <td><b>${q.status === 'correct' ? 'Benar' : (q.status === 'corrected' ? 'Sudah Dibenarkan' : 'Perlu Latihan')}</b></td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-          <script>window.print();</script>
-        </body>
-      </html>
-    `;
-    printWindow.document.write(htmlContent);
-    printWindow.document.close();
+    const headerTitle = `${studentData.name} - ${studentData.class} - Evaluasi ${currentMonthName}`;
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
+    const margin = 15;
+    let y = 20;
+
+    pdf.setFontSize(14);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setTextColor(30, 27, 75);
+    const titleLines = pdf.splitTextToSize(headerTitle, 180);
+    pdf.text(titleLines, margin, y);
+    y += titleLines.length * 7 + 2;
+
+    pdf.setFontSize(9.5);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setTextColor(100, 116, 139);
+    pdf.text(`Materi / Paket: ${exam.title} (${exam.subject})  •  Nilai: ${exam.score} / 100`, margin, y);
+    y += 5;
+    pdf.text(`Tanggal Upload Soal: ${exam.uploadDate}  •  Tanggal Scan: ${exam.date}`, margin, y);
+    y += 7;
+
+    pdf.setDrawColor(203, 213, 225);
+    pdf.line(margin, y, 195, y);
+    y += 8;
+
+    pdf.setFontSize(10);
+    (exam.questions || []).forEach((q) => {
+      const statusText = q.status === 'correct' ? 'Benar' : (q.status === 'corrected' ? 'Sudah Dibenarkan' : 'Perlu Latihan');
+      const rowText = `${q.no}. ${q.text || q.question || 'Soal Latihan'} [${statusText}]`;
+      const lines = pdf.splitTextToSize(rowText, 180);
+      if (y + lines.length * 5.8 > 275) {
+        pdf.addPage();
+        y = 20;
+      }
+      pdf.text(lines, margin, y);
+      y += lines.length * 5.8 + 3;
+    });
+
+    pdf.save(`${headerTitle}.pdf`);
   };
 
   if (!loggedInCode || (!studentData && isLoadingData)) {
@@ -462,9 +538,9 @@ export default function App() {
                       <button
                         onClick={() => handleDownloadReport(exam)}
                         className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5"
-                        title="Download / Cetak Laporan"
+                        title="Download PDF Laporan"
                       >
-                        <Download className="w-3.5 h-3.5" /> Download
+                        <Download className="w-3.5 h-3.5" /> Download PDF
                       </button>
                     </div>
                   </div>
@@ -474,7 +550,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* BAGIAN BARU: EVALUASI BELAJAR & PERKEMBANGAN ANAK (REALTIME DARI SUPABASE) */}
+        {/* EVALUASI BELAJAR & PERKEMBANGAN ANAK (REALTIME DARI SUPABASE) */}
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <div className="flex items-center gap-2">
@@ -496,9 +572,17 @@ export default function App() {
                     Laporan Evaluasi Akhir Bulan (Pengajar)
                   </h3>
                 </div>
-                <span className="text-[11px] font-semibold text-indigo-200 bg-indigo-800/70 px-2.5 py-0.5 rounded-full border border-indigo-700">
-                  {currentMonthName}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold text-indigo-200 bg-indigo-800/70 px-2.5 py-0.5 rounded-full border border-indigo-700">
+                    {currentMonthName}
+                  </span>
+                  <button
+                    onClick={() => handleDownloadEvaluationPDF(studentData.monthlyReport)}
+                    className="px-3 py-1 bg-white hover:bg-indigo-50 text-indigo-950 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Download PDF
+                  </button>
+                </div>
               </div>
 
               <div className="text-xs sm:text-sm text-indigo-100/95 leading-relaxed whitespace-pre-wrap font-sans space-y-1">
@@ -557,9 +641,17 @@ export default function App() {
                               : 'Evaluasi Harian • Perlu Penguatan'}
                           </span>
                         </div>
-                        <span className="text-[11px] font-semibold text-slate-500">
-                          {ev.dateKey || '-'}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-semibold text-slate-500">
+                            {ev.dateKey || '-'}
+                          </span>
+                          <button
+                            onClick={() => handleDownloadEvaluationPDF(ev)}
+                            className="px-2.5 py-1 bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 rounded-lg text-[11px] font-bold flex items-center gap-1 shadow-2xs"
+                          >
+                            <Download className="w-3 h-3" /> Download PDF
+                          </button>
+                        </div>
                       </div>
 
                       {ev.examTitle && (
@@ -668,7 +760,7 @@ export default function App() {
                   onClick={() => handleDownloadReport(selectedExamDetail)}
                   className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold flex items-center gap-1.5 border border-indigo-200"
                 >
-                  <Download className="w-3.5 h-3.5" /> Download Laporan Ini
+                  <Download className="w-3.5 h-3.5" /> Download PDF Laporan Ini
                 </button>
               </div>
 
